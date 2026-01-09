@@ -17,6 +17,13 @@ export interface Comment {
   timestamp: string;
 }
 
+export interface TelegramConfig {
+  botToken: string;
+  channelId: string;
+  isEnabled: boolean;
+  lastPostTime: string | null;
+}
+
 export interface TranslationStrings {
   title: string;
   question: string;
@@ -40,6 +47,18 @@ export interface TranslationStrings {
     submit: string;
     empty: string;
     identity: string;
+  };
+  automation: {
+    title: string;
+    setup: string;
+    botToken: string;
+    channelId: string;
+    enable: string;
+    save: string;
+    statusActive: string;
+    statusInactive: string;
+    lastPost: string;
+    postNow: string;
   };
   disclaimer: string;
   switchLang: string;

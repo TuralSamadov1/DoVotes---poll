@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Language, VoteData, OptionId, Comment } from './types';
+import { Language, VoteData, OptionId, Comment, TelegramConfig } from './types';
 import { TRANSLATIONS, ICONS } from './constants';
 import ProgressBar from './components/ProgressBar';
 
@@ -8,6 +8,7 @@ const STORAGE_KEY = 'dovotes_survey_voted';
 const MOCK_DATA_KEY = 'dovotes_mock_global_data';
 const COMMENTS_KEY = 'dovotes_mock_global_comments';
 const IDENTITY_KEY = 'dovotes_user_identity';
+const TG_CONFIG_KEY = 'dovotes_tg_automation_config';
 
 const generateUsername = () => {
   const digits = Array.from({ length: 8 }, () => Math.floor(Math.random() * 9) + 1).join('');
@@ -23,22 +24,35 @@ const App: React.FC = () => {
   const [copied, setCopied] = useState<boolean>(false);
   const [commentText, setCommentText] = useState('');
   const [userIdentity, setUserIdentity] = useState('');
+  const [showAdmin, setShowAdmin] = useState(false);
   
+  // Telegram Automation State
+  const [tgConfig, setTgConfig] = useState<TelegramConfig>({
+    botToken: '',
+    channelId: '',
+    isEnabled: false,
+    lastPostTime: null
+  });
+
   const t = TRANSLATIONS[lang];
   const isRtl = lang === 'fa';
   const commentListRef = useRef<HTMLDivElement>(null);
 
-  // Identity setup
+  // Load Initial Data
   useEffect(() => {
+    // Identity
     let identity = localStorage.getItem(IDENTITY_KEY);
     if (!identity) {
       identity = generateUsername();
       localStorage.setItem(IDENTITY_KEY, identity);
     }
     setUserIdentity(identity);
+
+    // TG Config
+    const savedTg = localStorage.getItem(TG_CONFIG_KEY);
+    if (savedTg) setTgConfig(JSON.parse(savedTg));
   }, []);
 
-  // Helper to get global state from "server" (localStorage)
   const getGlobalData = (): VoteData => {
     const stored = localStorage.getItem(MOCK_DATA_KEY);
     if (stored) return JSON.parse(stored);
@@ -59,7 +73,76 @@ const App: React.FC = () => {
     return stored ? JSON.parse(stored) : [];
   };
 
-  // Simulates activity from other users globally
+  const postToTelegram = async (configOverride?: TelegramConfig) => {
+    const config = configOverride || tgConfig;
+    if (!config.botToken || !config.channelId) return;
+
+    const data = getGlobalData();
+    const yesP = ((data.yes / data.total) * 100).toFixed(1);
+    const noP = ((data.no / data.total) * 100).toFixed(1);
+    const emP = ((data.emergency / data.total) * 100).toFixed(1);
+    const unP = ((data.undecided / data.total) * 100).toFixed(1);
+
+    const message = `📊 *DoVotes Public Opinion Update*
+
+Question: "${TRANSLATIONS.en.question}"
+
+✅ ${TRANSLATIONS.en.options.yes}: ${yesP}% (${data.yes})
+❌ ${TRANSLATIONS.en.options.no}: ${noP}% (${data.no})
+⚠️ ${TRANSLATIONS.en.options.emergency}: ${emP}% (${data.emergency})
+❔ ${TRANSLATIONS.en.options.undecided}: ${unP}% (${data.undecided})
+
+👥 *Total Votes:* ${data.total.toLocaleString()}
+🕒 *Updated:* ${new Date().toLocaleString()}
+
+🔗 [Vote here](${window.location.origin})`;
+
+    try {
+      const resp = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: config.channelId,
+          text: message,
+          parse_mode: 'Markdown'
+        })
+      });
+      if (resp.ok) {
+        const newConfig = { ...config, lastPostTime: new Date().toISOString() };
+        setTgConfig(newConfig);
+        localStorage.setItem(TG_CONFIG_KEY, JSON.stringify(newConfig));
+        console.log("Telegram update posted successfully.");
+      }
+    } catch (e) {
+      console.error("Telegram post failed", e);
+    }
+  };
+
+  // Check and trigger scheduled posts
+  const checkAutoPost = useCallback(() => {
+    if (!tgConfig.isEnabled || !tgConfig.botToken || !tgConfig.channelId) return;
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    const todayStr = now.toDateString();
+    
+    // Windows: Morning (9-11) and Evening (21-23)
+    const isMorningWindow = currentHour >= 9 && currentHour < 11;
+    const isEveningWindow = currentHour >= 21 && currentHour < 23;
+
+    if (isMorningWindow || isEveningWindow) {
+      const lastPost = tgConfig.lastPostTime ? new Date(tgConfig.lastPostTime) : null;
+      const alreadyPostedInThisWindow = lastPost && 
+        lastPost.toDateString() === todayStr && 
+        ((isMorningWindow && lastPost.getHours() >= 9 && lastPost.getHours() < 11) ||
+         (isEveningWindow && lastPost.getHours() >= 21 && lastPost.getHours() < 23));
+
+      if (!alreadyPostedInThisWindow) {
+        postToTelegram();
+      }
+    }
+  }, [tgConfig]);
+
   const simulateGlobalActivity = useCallback(() => {
     const currentData = getGlobalData();
     const options: OptionId[] = ['yes', 'no', 'emergency', 'undecided'];
@@ -73,7 +156,8 @@ const App: React.FC = () => {
       currentData.lastUpdate = new Date().toISOString();
       localStorage.setItem(MOCK_DATA_KEY, JSON.stringify(currentData));
     }
-  }, []);
+    checkAutoPost();
+  }, [checkAutoPost]);
 
   const refreshUI = useCallback(() => {
     setResults(getGlobalData());
@@ -108,52 +192,42 @@ const App: React.FC = () => {
   const handleCommentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!commentText.trim()) return;
-
     const newComment: Comment = {
       id: Date.now().toString(),
       username: userIdentity,
       text: commentText.trim(),
       timestamp: new Date().toISOString()
     };
-
     const allComments = getGlobalComments();
-    const updatedComments = [newComment, ...allComments].slice(0, 100); // Keep last 100
+    const updatedComments = [newComment, ...allComments].slice(0, 100);
     localStorage.setItem(COMMENTS_KEY, JSON.stringify(updatedComments));
     setComments(updatedComments);
     setCommentText('');
   };
 
+  const saveTgConfig = () => {
+    localStorage.setItem(TG_CONFIG_KEY, JSON.stringify(tgConfig));
+    alert("Configuration Saved.");
+  };
+
   const copyToClipboard = () => {
-    const url = window.location.href;
-    navigator.clipboard.writeText(url).then(() => {
+    navigator.clipboard.writeText(window.location.href).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
   };
 
-  const handleTelegramShare = () => {
-    const text = encodeURIComponent(t.question);
-    window.open(`https://t.me/share/url?url=${encodeURIComponent(window.location.href)}&text=${text}`, '_blank');
-  };
-
-  const handleWhatsAppShare = () => {
-    const text = encodeURIComponent(`${t.question}\n\n${window.location.href}`);
-    window.open(`https://wa.me/?text=${text}`, '_blank');
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-pulse text-gray-400 font-medium tracking-widest text-xs uppercase">Connecting...</div>
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="animate-pulse text-gray-400 font-medium tracking-widest text-xs uppercase">Connecting...</div>
+    </div>
+  );
 
   return (
     <div className={`min-h-screen bg-gray-50 flex flex-col items-center p-4 sm:p-6 transition-all duration-300 ${isRtl ? 'font-sans' : ''}`} dir={isRtl ? 'rtl' : 'ltr'}>
       <header className="w-full max-w-xl flex justify-between items-center mb-10">
-        <div className="flex items-center gap-2">
-           <div className="w-2 h-2 rounded-full bg-blue-600"></div>
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setShowAdmin(!showAdmin)}>
+           <div className={`w-2 h-2 rounded-full ${tgConfig.isEnabled ? 'bg-green-500' : 'bg-blue-600'}`}></div>
            <h1 className="text-lg font-bold text-gray-900 tracking-tight">{t.title}</h1>
         </div>
         <button 
@@ -165,6 +239,69 @@ const App: React.FC = () => {
       </header>
 
       <main className="w-full max-w-xl flex-1 space-y-6">
+        
+        {/* Admin Setup Panel (Visible when title clicked) */}
+        {showAdmin && (
+          <section className="bg-gray-900 text-white rounded-2xl p-6 mb-6 shadow-xl animate-fadeIn">
+            <h3 className="text-sm font-black uppercase tracking-widest mb-6 flex items-center justify-between">
+              <span>{t.automation.setup}</span>
+              <button onClick={() => setShowAdmin(false)} className="text-gray-500 hover:text-white">&times;</button>
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">{t.automation.botToken}</label>
+                <input 
+                  type="password" 
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none" 
+                  value={tgConfig.botToken}
+                  onChange={(e) => setTgConfig({...tgConfig, botToken: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-gray-400 mb-1">{t.automation.channelId}</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none" 
+                  placeholder="@yourchannel"
+                  value={tgConfig.channelId}
+                  onChange={(e) => setTgConfig({...tgConfig, channelId: e.target.value})}
+                />
+              </div>
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <input 
+                  type="checkbox" 
+                  className="w-4 h-4 rounded border-gray-700 bg-gray-800" 
+                  checked={tgConfig.isEnabled}
+                  onChange={(e) => setTgConfig({...tgConfig, isEnabled: e.target.checked})}
+                />
+                <span className="text-xs font-bold text-gray-300 group-hover:text-white">{t.automation.enable}</span>
+              </label>
+              
+              <div className="pt-2 flex gap-2">
+                <button 
+                  onClick={saveTgConfig}
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded-lg text-xs font-black uppercase tracking-widest"
+                >
+                  {t.automation.save}
+                </button>
+                <button 
+                  onClick={() => postToTelegram()}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 py-2 rounded-lg text-xs font-black uppercase tracking-widest"
+                >
+                  {t.automation.postNow}
+                </button>
+              </div>
+              
+              {tgConfig.lastPostTime && (
+                <div className="text-[9px] text-gray-500 flex justify-between uppercase tracking-widest pt-2 font-bold border-t border-gray-800">
+                  <span>{t.automation.lastPost}</span>
+                  <span className="text-gray-300">{new Date(tgConfig.lastPostTime).toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         {/* Survey Section */}
         <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-8 leading-tight tracking-tight">
@@ -195,8 +332,8 @@ const App: React.FC = () => {
                 </div>
                 
                 <div className={`flex items-center gap-2 ${isRtl ? 'flex-row-reverse' : ''}`}>
-                  <button onClick={handleTelegramShare} className="flex-1 flex items-center justify-center gap-2 bg-[#229ED9] text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">{ICONS.telegram} <span className="hidden sm:inline">Telegram</span></button>
-                  <button onClick={handleWhatsAppShare} className="flex-1 flex items-center justify-center gap-2 bg-[#25D366] text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">{ICONS.whatsapp} <span className="hidden sm:inline">WhatsApp</span></button>
+                  <button onClick={() => window.open(`https://t.me/share/url?url=${encodeURIComponent(window.location.href)}&text=${encodeURIComponent(t.question)}`)} className="flex-1 flex items-center justify-center gap-2 bg-[#229ED9] text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">{ICONS.telegram} <span className="hidden sm:inline">Telegram</span></button>
+                  <button onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(t.question + '\n\n' + window.location.href)}`)} className="flex-1 flex items-center justify-center gap-2 bg-[#25D366] text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95">{ICONS.whatsapp} <span className="hidden sm:inline">WhatsApp</span></button>
                   <button onClick={copyToClipboard} className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${copied ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-200'}`}>{copied ? ICONS.check : ICONS.share} <span>{copied ? t.stats.copied : t.stats.share}</span></button>
                 </div>
               </div>
@@ -285,8 +422,10 @@ const App: React.FC = () => {
 
       <div className="mt-auto pt-10 pb-4">
         <div className="flex items-center gap-2 opacity-30 hover:opacity-100 transition-opacity">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-          <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.2em]">LIVE DATA FEED ACTIVE (X2 WEIGHT)</span>
+          <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${tgConfig.isEnabled ? 'bg-green-500' : 'bg-blue-600'}`}></span>
+          <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.2em]">
+            {tgConfig.isEnabled ? t.automation.statusActive : t.automation.statusInactive}
+          </span>
         </div>
       </div>
     </div>

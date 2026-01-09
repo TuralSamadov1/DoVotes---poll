@@ -27,6 +27,18 @@ export const TRANSLATIONS: Record<'en' | 'fa', TranslationStrings> = {
       empty: "No comments yet.",
       identity: "Posting as:"
     },
+    automation: {
+      title: "Channel Automation",
+      setup: "Telegram Channel Setup",
+      botToken: "Bot Token",
+      channelId: "Channel ID (e.g. @mychannel)",
+      enable: "Enable Auto-Posting (2x Daily)",
+      save: "Save Config",
+      statusActive: "Automation Active",
+      statusInactive: "Automation Disabled",
+      lastPost: "Last Post:",
+      postNow: "Post to Channel Now"
+    },
     disclaimer: "This platform shares survey results only. No opinions, no analysis, no news. Data shown represents anonymous public opinion.",
     switchLang: "فارسی"
   },
@@ -53,6 +65,18 @@ export const TRANSLATIONS: Record<'en' | 'fa', TranslationStrings> = {
       submit: "ارسال",
       empty: "هنوز نظری ثبت نشده است.",
       identity: "ارسال به عنوان:"
+    },
+    automation: {
+      title: "اتوماسیون کانال",
+      setup: "تنظیمات کانال تلگرام",
+      botToken: "توکن ربات",
+      channelId: "شناسه کانال (مثلاً @mychannel)",
+      enable: "فعال‌سازی ارسال خودکار (۲ بار در روز)",
+      save: "ذخیره تنظیمات",
+      statusActive: "اتوماسیون فعال",
+      statusInactive: "اتوماسیون غیرفعال",
+      lastPost: "آخرین ارسال:",
+      postNow: "ارسال دستی به کانال"
     },
     disclaimer: "این پلتفرم صرفاً نتایج نظرسنجی را به اشتراک می‌گذارد. بدون تحلیل، بدون خبر. داده‌ها نمایانگر افکار عمومیِ ناشناس است.",
     switchLang: "English"
