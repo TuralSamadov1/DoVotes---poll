@@ -1,0 +1,5 @@
+{
+  "name": "DoVotes – Survey",
+  "description": "A minimal, anonymous public opinion survey platform providing live aggregated statistical data without personal tracking.",
+  "requestFramePermissions": []
+}
